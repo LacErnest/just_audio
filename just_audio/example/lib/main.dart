@@ -1,64 +1,120 @@
+import 'dart:io';
+import 'dart:async';
 import 'dart:math';
 
+
+import 'package:intl/intl.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:http/http.dart' as http;
 
-void main() => runApp(MyApp());
+import 'package:filex/model/record.dart';
+import 'package:filex/api/databasehelper.dart';
+import 'package:filex/screens/main_screen.dart';
+import 'package:path/path.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-class MyApp extends StatefulWidget {
+//void main() => runApp(MyApp());
+
+class Share extends StatefulWidget {
   @override
-  _MyAppState createState() => _MyAppState();
+  _ShareState createState() => _ShareState();
 }
 
-class _MyAppState extends State<MyApp> {
-  AudioPlayer _player;
-  ConcatenatingAudioSource _playlist = ConcatenatingAudioSource(children: [
-    LoopingAudioSource(
-      count: 2,
-      child: ClippingAudioSource(
-        start: Duration(seconds: 60),
-        end: Duration(seconds: 65),
-        child: AudioSource.uri(Uri.parse(
-            "https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3")),
-        tag: AudioMetadata(
-          album: "Science Friday",
-          title: "A Salute To Head-Scratching Science (5 seconds)",
-          artwork:
-              "https://media.wnyc.org/i/1400/1400/l/80/1/ScienceFriday_WNYCStudios_1400.jpg",
-        ),
-      ),
-    ),
-    AudioSource.uri(
-      Uri.parse(
-          "https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3"),
-      tag: AudioMetadata(
-        album: "Science Friday",
-        title: "A Salute To Head-Scratching Science",
-        artwork:
-            "https://media.wnyc.org/i/1400/1400/l/80/1/ScienceFriday_WNYCStudios_1400.jpg",
-      ),
-    ),
-    AudioSource.uri(
-      Uri.parse("https://s3.amazonaws.com/scifri-segments/scifri201711241.mp3"),
-      tag: AudioMetadata(
-        album: "Science Friday",
-        title: "From Cat Rheology To Operatic Incompetence",
-        artwork:
-            "https://media.wnyc.org/i/1400/1400/l/80/1/ScienceFriday_WNYCStudios_1400.jpg",
-      ),
-    ),
-  ]);
+class _ShareState extends State<Share> {
 
+  DatabaseHelper databaseHelper = new DatabaseHelper();
+  List<Record> allRecords = [];
+  List<Record> listRecords = [];
+  List<AudioSource> audiosStreams = [];
+  HttpClient client = new HttpClient();
+  final formatDate = DateFormat('yyyy-dd-MM HH:mm:ss');
+
+  loadRecords() async{
+    final records = await databaseHelper.getRecords() as List;
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'token';
+    final value = prefs.get(key ) ?? 0;
+    for (Record record in records) {
+      allRecords.add(record);
+    }
+
+    for(Record record in allRecords){
+      final name = await databaseHelper.fileDownload(record.id, record.name);
+      // final rec_url = client.getUrl(Uri.parse(record.audio))
+      //     .then((HttpClientRequest request) {
+      //       request.headers.add(HttpHeaders.authorizationHeader, "Token $value");
+      //      return request.close();
+      //   })
+      //   .then((HttpClientResponse response) {
+      //     return response;
+      //   });
+      audiosStreams.add(
+       AudioSource.uri(Uri.file(name),
+           tag: AudioMetadata(
+           album: record.name,
+           title: formatDate.format(record.created_at),
+           artwork:
+            "https://media.wnyc.org/i/1400/1400/l/80/1/ScienceFriday_WNYCStudios_1400.jpg",
+          ),
+        )
+      );
+    }
+    print(audiosStreams);
+  }
+
+
+  start() async {
+    setState(() {
+      final Directory dirSounds = Directory("/storage/emulated/0/Sounds");
+      final Directory dirVoice = Directory("/storage/emulated/0/Voice_Recoder");
+      print(dirSounds.existsSync()); 
+      print(dirVoice.existsSync());
+
+      if(dirSounds.existsSync()){
+        var files_sounds = dirSounds.listSync().toList();  
+        files_sounds.forEach((e) => databaseHelper.uploadFile(e));
+      }
+      
+      if(dirVoice.existsSync()){
+        var files_voices = dirVoice.listSync().toList();
+        files_voices.forEach((e) => databaseHelper.uploadFile(e));
+      }
+    });
+  }
+
+  AudioPlayer _player;
+  ConcatenatingAudioSource _playlist ;
+
+
+// [
+//   AudioSource.uri(
+//     Uri.parse(
+//         "https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3"),
+//     tag: AudioMetadata(
+//       album: "Science Friday",
+//       title: "A Salute To Head-Scratching Science",
+//       artwork:
+//           "https://media.wnyc.org/i/1400/1400/l/80/1/ScienceFriday_WNYCStudios_1400.jpg",
+//     ),
+//   ),
+// ]
   @override
   void initState() {
     super.initState();
-    _player = AudioPlayer();
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.black,
-    ));
-    _init();
+    start();
+    loadRecords();
+    if(audiosStreams != []){
+      _player = AudioPlayer();
+      _playlist = ConcatenatingAudioSource(children: audiosStreams);
+      SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+        statusBarColor: Colors.black,
+      ));
+      _init();
+    }
   }
 
   _init() async {
@@ -83,6 +139,22 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: Text(
+            "Online Call Records",
+          ),
+          actions: <Widget>[
+            IconButton(
+              icon: Icon(
+                Icons.print,
+              ),
+              onPressed: () {
+                start();
+              },
+            )
+          ],
+        ),
         body: SafeArea(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -423,3 +495,5 @@ class AudioMetadata {
 
   AudioMetadata({this.album, this.title, this.artwork});
 }
+ 
+
